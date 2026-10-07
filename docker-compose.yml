@@ -1,0 +1,181 @@
+  # ╔══════════════════════════════════════════════════════════════╗
+# ║   PFA — Trafic en Temps Réel | Pipeline Data Engineering     ║
+# ║   Stack : Kafka · PySpark · Delta Lake · Trino · Power BI    ║
+# ║   (MinIO supprimé — Delta Lake lu directement par Trino)     ║
+# ╚══════════════════════════════════════════════════════════════╝
+
+services:
+
+  # ─────────────────────────────────────────────
+  # ZOOKEEPER
+  # ─────────────────────────────────────────────
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.4.0
+    container_name: pfa_zookeeper
+    hostname: zookeeper
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+      ZOOKEEPER_LOG4J_ROOT_LOGLEVEL: WARN
+    ports:
+      - "2181:2181"
+    volumes:
+      - zookeeper_data:/var/lib/zookeeper/data
+      - zookeeper_logs:/var/lib/zookeeper/log
+    networks:
+      - pfa_network
+    healthcheck:
+      test: ["CMD", "bash", "-c", "echo ruok | nc -w 2 127.0.0.1 2181"]
+      interval: 10s
+      timeout: 10s
+      retries: 20
+      start_period: 30s
+
+  # ─────────────────────────────────────────────
+  # KAFKA BROKER
+  # ─────────────────────────────────────────────
+  kafka:
+    image: confluentinc/cp-kafka:7.4.0
+    container_name: pfa_kafka
+    hostname: kafka
+    depends_on:
+      zookeeper:
+        condition: service_healthy
+    ports:
+      - "9092:9092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092,PLAINTEXT_INTERNAL://kafka:29092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_INTERNAL:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT_INTERNAL
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      KAFKA_LOG4J_ROOT_LOGLEVEL: WARN
+    volumes:
+      - kafka_data:/var/lib/kafka/data
+    networks:
+      - pfa_network
+    healthcheck:
+      test: ["CMD", "bash", "-c", "kafka-topics --bootstrap-server 127.0.0.1:9092 --list"]
+      interval: 15s
+      timeout: 15s
+      retries: 20
+      start_period: 60s
+
+  # ─────────────────────────────────────────────
+  # KAFKA UI
+  # ─────────────────────────────────────────────
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    container_name: pfa_kafka_ui
+    depends_on:
+      kafka:
+        condition: service_healthy
+    ports:
+      - "8080:8080"
+    environment:
+      KAFKA_CLUSTERS_0_NAME: PFA-Cluster
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:29092
+      KAFKA_CLUSTERS_0_ZOOKEEPER: zookeeper:2181
+    networks:
+      - pfa_network
+
+  # ─────────────────────────────────────────────
+  # POSTGRES — Metadata Store for Hive Metastore
+  # ─────────────────────────────────────────────
+  postgres-hms:
+    image: postgres:15
+    container_name: pfa_postgres_hms
+    hostname: postgres-hms
+    environment:
+      POSTGRES_DB: metastore
+      POSTGRES_USER: hive
+      POSTGRES_PASSWORD: hive
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_hms_data:/var/lib/postgresql/data
+    networks:
+      - pfa_network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U hive"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  # ─────────────────────────────────────────────
+  # HIVE METASTORE — Table Registry for Trino
+  # ─────────────────────────────────────────────
+  hive-metastore:
+    image: apache/hive:4.0.0
+    container_name: pfa_hive_metastore
+    hostname: hive-metastore
+    environment:
+      DB_TYPE: postgres
+      POSTGRES_DB: metastore
+      POSTGRES_USER: hive
+      POSTGRES_PASSWORD: hive
+      POSTGRES_HOST: postgres-hms
+      POSTGRES_PORT: 5432
+      SERVICE_NAME: metastore
+      HIVE_CORE_METASTORE_TRANSPORT: thrift
+      HIVE_METASTORE_WAREHOUSE_DIR: /data/delta
+      HIVE_CUSTOM_CONF_DIR: /opt/hive/custom-conf
+    ports:
+      - "9083:9083"
+    volumes:
+      - ./data/delta:/data/delta:ro
+      - ./data/pbi:/data/pbi:ro
+      - ./conf/hive:/opt/hive/custom-conf
+
+    depends_on:
+      postgres-hms:
+        condition: service_healthy
+    networks:
+      - pfa_network
+
+  # ─────────────────────────────────────────────
+  # TRINO — SQL Engine for Power BI (Port 8081)
+  # ─────────────────────────────────────────────
+  trino:
+    image: trinodb/trino:latest
+    container_name: pfa_trino
+    hostname: trino
+    ports:
+      - "8081:8080"
+    environment:
+      HADOOP_CONF_DIR: /etc/trino
+    volumes:
+      - ./data/delta:/data/delta:ro
+      - ./data/pbi:/data/pbi:ro
+      - ./conf/trino/catalog:/etc/trino/catalog
+      - ./conf/trino/jvm.config:/etc/trino/jvm.config:ro
+      - ./conf/hive/core-site.xml:/etc/trino/core-site.xml:ro
+      - C:\Users\HP\Downloads\pfa\PFA_RealTime_Traffic\PFA_RealTime_Traffic:/workspace
+    depends_on:
+      hive-metastore:
+        condition: service_started
+    networks:
+      - pfa_network
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8080/v1/info || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 20
+      start_period: 60s
+
+
+volumes:
+  zookeeper_data:
+  zookeeper_logs:
+  kafka_data:
+  postgres_hms_data:
+
+networks:
+  pfa_network:
+    driver: bridge
+    name: pfa_traffic_network

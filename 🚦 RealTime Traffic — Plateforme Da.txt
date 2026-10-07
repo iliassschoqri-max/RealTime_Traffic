@@ -1,0 +1,208 @@
+🚦 RealTime Traffic — Plateforme Data Engineering temps réel
+
+Plateforme de bout en bout pour l'analyse du trafic routier en temps réel. Des événements de trafic sont ingérés via Apache Kafka, traités par Spark Structured Streaming selon une Medallion Architecture (Bronze → Silver → Gold), stockés dans Delta Lake, interrogés avec Trino, puis exposés par des API FastAPI, un dashboard web temps réel et Power BI.
+
+Flux de valeur : Donnée brute (Kafka) ➔ Validation (Silver) ➔ Agrégation (Gold) ➔ SQL (Trino) ➔ Visualisation (Dashboard / Power BI)
+
+Sommaire
+Objectifs
+Architecture
+Détail des composants
+Modélisation des données
+Stack technique
+Structure du projet
+Prérequis
+Installation et lancement
+Utilisation
+Points forts
+Perspectives
+Auteur
+🎯 Objectifs
+Simuler un flux continu de données de capteurs routiers (vitesse, type de véhicule, coordonnées GPS, incidents).
+Construire un pipeline de streaming fiable, de la donnée brute à la donnée prête pour l'analyse.
+Fournir des indicateurs clés (KPI) en temps réel.
+Proposer des prévisions, une détection d'anomalies et des suggestions de routage en cas de congestion.
+Permettre l'analyse décisionnelle (SQL, Power BI) sur un modèle en étoile.
+🏗️ Architecture
+cache + WebSocket
+Producer Pythoncapteurs simulés
+Apache Kafka
+Bronzedonnées brutes
+Silverparsing, nettoyage,dédoublonnage,enrichissement
+Goldschéma en étoile
+Delta Lake+ Hive Metastore+ PostgreSQL
+Trinomoteur SQL
+KPI APIFastAPI
+Power BI
+ML ServerFastAPI
+Dashboard web
+
+Le traitement Bronze, Silver et Gold est assuré par PySpark Structured Streaming.
+
+🧩 Détail des composants
+1. Ingestion et streaming (Kafka et Bronze)
+Source : producer/traffic_producer.py génère des messages JSON simulant des capteurs routiers (vitesse, type de véhicule, coordonnées GPS, incidents).
+Transport : Kafka sert de buffer à haute disponibilité entre le producteur et Spark.
+Bronze (spark/bronze_pipeline.py) :
+consomme les flux Kafka en temps réel ;
+sauvegarde les données brutes sans transformation dans data/delta/bronze ;
+objectif : persistance immédiate, pour permettre le rejeu (replay) en cas d'erreur.
+2. Raffinement et qualité (Silver)
+
+Traitement dans spark/silver_pipeline.py :
+
+Parsing : application du schéma défini dans spark/schema.py aux JSON bruts.
+Nettoyage : filtrage des valeurs aberrantes (par exemple, vitesses supérieures à 250 km/h) et gestion des valeurs nulles.
+Dédoublonnage : utilisation des watermarks Spark pour ignorer les événements dupliqués arrivant en retard.
+Enrichissement : ajout de colonnes techniques (timestamp de traitement, indicateurs de congestion).
+3. Modélisation décisionnelle (Gold)
+
+Traitement dans spark/gold_pipeline.py :
+
+Implémente un schéma en étoile optimisé pour les requêtes SQL analytiques (OLAP).
+Dimensions : dim_time, dim_road_segment, dim_vehicle, dim_event_type.
+Faits : fact_traffic_events, qui contient les métriques calculées.
+Stockage : tables Delta Lake, avec support complet des transactions ACID.
+4. Couche de service
+
+KPI API (api/main.py) :
+
+Cache-first : un worker en arrière-plan interroge Trino toutes les 5 secondes et met à jour un cache global. Le frontend reçoit ainsi des réponses en temps constant (O(1)).
+WebSockets : les mises à jour sont poussées en temps réel aux dashboards connectés.
+
+ML Server (ml_server/main.py) :
+
+Prévisions : estimation du trafic sur les prochaines 24 heures.
+Détection d'anomalies : identification de comportements de trafic suspects.
+Routage intelligent : suggestion d'alternatives en cas de congestion.
+Modèles utilisés : Gradient Boosting et Prophet (prévisions), Isolation Forest (anomalies).
+5. Infrastructure Big Data
+
+Le fichier docker-compose.yml orchestre l'ensemble :
+
+Kafka : transport des événements.
+Trino : exécute des requêtes SQL sur les fichiers Delta comme s'ils étaient dans une base relationnelle.
+Hive Metastore : catalogue central qui définit les tables pour Trino et Spark.
+PostgreSQL : base de support pour le stockage des métadonnées Hive.
+🗂️ Modélisation des données
+
+Couche Gold en schéma en étoile :
+
+Table	Rôle
+fact_traffic_events	Table de faits : un événement de trafic par ligne, avec les métriques calculées
+dim_time	Axe temporel
+dim_road_segment	Segments de route
+dim_vehicle	Types de véhicules
+dim_event_type	Types d'événements
+survient à
+sur
+concerne
+de type
+FACT_TRAFFIC_EVENTS
+DIM_TIME
+DIM_ROAD_SEGMENT
+DIM_VEHICLE
+DIM_EVENT_TYPE
+🛠️ Stack technique
+Domaine	Technologies
+Traitement	Apache Spark (PySpark, Structured Streaming), Delta Lake
+Streaming / messagerie	Apache Kafka
+Moteur de requêtes	Trino (Presto)
+Métadonnées	Hive Metastore, PostgreSQL
+API / backend	Python, FastAPI, WebSockets
+Machine Learning	Gradient Boosting, Prophet, Isolation Forest
+Visualisation	Dashboard web, Power BI
+Infrastructure	Docker, Docker Compose
+📂 Structure du projet
+PFA_RealTime_Traffic/
+├── producer/
+│   └── traffic_producer.py   # Génération d'événements de trafic synthétiques
+├── spark/
+│   ├── schema.py             # Schéma des événements JSON
+│   ├── bronze_pipeline.py    # Ingestion Kafka -> Bronze
+│   ├── silver_pipeline.py    # Nettoyage, dédoublonnage, enrichissement
+│   └── gold_pipeline.py      # Schéma en étoile
+├── api/
+│   └── main.py               # KPI API (cache + WebSockets)
+├── ml_server/
+│   └── main.py               # Prévisions, anomalies, routage
+├── conf/                     # Configuration de l'infrastructure
+├── scripts/                  # Déploiement et maintenance
+├── data/delta/               # Tables Delta (bronze, silver, gold)
+├── docker-compose.yml        # Kafka, Hive, PostgreSQL, Trino
+└── README.md
+✅ Prérequis
+Docker et Docker Compose
+Python 3.10+
+Git
+Une machine avec suffisamment de mémoire : Kafka, Spark et Trino sont gourmands (8 Go de RAM minimum, 16 Go recommandés)
+🚀 Installation et lancement
+1. Cloner le dépôt
+bash
+git clone https://github.com/iliassschoqri-max/RealTime_Traffic.git
+cd RealTime_Traffic
+2. Démarrer l'infrastructure
+bash
+docker compose up -d
+docker compose ps
+3. Installer les dépendances Python
+bash
+pip install -r requirements.txt
+4. Lancer le producteur d'événements
+bash
+python producer/traffic_producer.py
+5. Lancer les pipelines Spark
+bash
+spark-submit spark/bronze_pipeline.py
+spark-submit spark/silver_pipeline.py
+spark-submit spark/gold_pipeline.py
+
+Les commandes spark-submit peuvent aussi se lancer dans le conteneur Spark (docker compose exec ...), selon ta configuration.
+
+6. Lancer les API
+bash
+uvicorn api.main:app --host 0.0.0.0 --port 8000
+uvicorn ml_server.main:app --host 0.0.0.0 --port 8001
+7. Arrêter l'infrastructure
+bash
+docker compose down
+📊 Utilisation
+Service	Adresse	Description
+Dashboard web	http://localhost:8000	KPI en temps réel
+KPI API (Swagger)	http://localhost:8000/docs	Documentation de l'API
+ML Server (Swagger)	http://localhost:8001/docs	Prévisions, anomalies, routage
+Trino	http://localhost:8080	Requêtes SQL sur la couche Gold
+
+Les ports ci-dessus sont des valeurs par défaut : adapte-les à ton docker-compose.yml.
+
+Exemple de requête Trino :
+
+sql
+SELECT road_segment_id, COUNT(*) AS nb_evenements
+FROM fact_traffic_events
+GROUP BY road_segment_id
+ORDER BY nb_evenements DESC
+LIMIT 10;
+
+Power BI : connecte-toi à Trino (connecteur ODBC ou JDBC) et importe les tables Gold.
+
+Captures d'écran
+<!-- Ajoute tes images dans un dossier docs/ puis décommente : --> <!-- ![Dashboard](docs/dashboard.png) -->
+⭐ Points forts
+Fiabilité : transactions ACID (Delta Lake), dédoublonnage par watermarks, rejeu possible grâce à la couche Bronze.
+Qualité des données : parsing par schéma, filtrage des valeurs aberrantes, enrichissement.
+Performance : cache-first côté API (réponses en O(1)) et modèle en étoile optimisé pour l'OLAP.
+Temps réel : Kafka, Structured Streaming et WebSockets.
+Analytique et prédictif : reporting classique (SQL, Power BI) et services de ML (prévisions, anomalies, routage).
+Reproductible : infrastructure complète démarrée par Docker Compose.
+🔭 Perspectives
+Remplacer les données simulées par une source réelle (API de trafic, capteurs).
+Entraîner et évaluer les modèles ML sur des données réelles, avec suivi des performances.
+Ajouter des tests automatisés et une CI (GitHub Actions).
+Orchestration (Airflow) et supervision (Prometheus, Grafana).
+Déploiement sur Kubernetes ou sur le cloud.
+👤 Auteur
+
+Choqri Iliasse — étudiant ingénieur, EMSI Tanger, filière Intelligence Artificielle et Science des Données.
+
+GitHub : @iliassschoqri-max

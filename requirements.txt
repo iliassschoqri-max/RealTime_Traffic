@@ -1,0 +1,21 @@
+# ─── API Server ───────────────────────────
+fastapi>=0.110.0
+uvicorn[standard]>=0.29.0
+trino>=0.328.0
+pandas>=2.0.0
+fpdf2>=2.7.0
+matplotlib>=3.8.0
+numpy>=1.24.0
+
+# ─── ML Server ────────────────────────────
+# (aucune dépendance externe — purement FastAPI + random)
+
+# ─── Kafka Producer ──────────────────────
+kafka-python>=2.0.2
+Faker>=22.0.0
+pytz>=2023.3
+
+# ─── Spark Pipelines ─────────────────────
+# pyspark>=3.5.0
+# delta-spark>=3.1.0
+# (installé via spark/ directement)
